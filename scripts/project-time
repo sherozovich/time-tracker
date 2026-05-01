@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+"""Claude Code proje-süre raporu (opsiyonel Groq ile konu özeti).
+
+CSV alanları: timestamp_utc, session_id, cwd, prompt_excerpt
+Eski (3 alanlı) satırlar hâlâ okunur.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+TRACKER_ROOT = Path.home() / "Documents" / "projects" / "time-tracker"
+CSV_PATH = TRACKER_ROOT / "data" / "project-time.csv"
+PROJECTS_ROOT = Path.home() / "Documents" / "projects"
+GROQ_ENV_FILE = TRACKER_ROOT / "scripts" / "groq.env"
+TOPIC_CACHE = TRACKER_ROOT / "data" / "session-topics.json"
+
+IDLE_CAP_MIN = 10
+SINGLE_PROMPT_MIN = 2
+MAX_PROMPTS_FOR_TOPIC = 8
+PROMPT_CHAR_CAP = 300
+
+
+# ----- süre hesabı -----
+
+import re as _re
+_PROJECTS_PATH_RE = _re.compile(r"^/Users/[^/]+/Documents/projects(/(?P<rest>.*))?/?$")
+
+
+def normalize_project(cwd: str) -> str:
+    if not cwd:
+        return "(bilinmiyor)"
+    m = _PROJECTS_PATH_RE.match(cwd.rstrip("/") or cwd)
+    if not m:
+        return cwd
+    rest = m.group("rest") or ""
+    if not rest:
+        return "(projects kökü)"
+    return rest.split("/", 1)[0]
+
+
+def parse_ts(s: str) -> datetime:
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    return datetime.fromisoformat(s)
+
+
+def human(minutes: float) -> str:
+    total = int(round(minutes))
+    h, m = divmod(total, 60)
+    return f"{m}dk" if h == 0 else f"{h}s {m:02d}dk"
+
+
+# ----- Groq -----
+
+def load_groq_env() -> dict[str, str]:
+    env: dict[str, str] = {}
+    if not GROQ_ENV_FILE.exists():
+        return env
+    for raw in GROQ_ENV_FILE.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        env[k.strip()] = v.strip().strip('"').strip("'")
+    return env
+
+
+def load_topic_cache() -> dict[str, dict]:
+    if not TOPIC_CACHE.exists():
+        return {}
+    try:
+        return json.loads(TOPIC_CACHE.read_text())
+    except json.JSONDecodeError:
+        return {}
+
+
+def save_topic_cache(cache: dict[str, dict]) -> None:
+    TOPIC_CACHE.write_text(json.dumps(cache, ensure_ascii=False, indent=2))
+
+
+def groq_summarize(prompts: list[str], env: dict[str, str]) -> str | None:
+    api_key = env.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        return None
+    base = env.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+    model = env.get("GROQ_TOPIC_MODEL", "llama-3.1-8b-instant")
+
+    sample = prompts[:MAX_PROMPTS_FOR_TOPIC]
+    joined = "\n---\n".join(p[:PROMPT_CHAR_CAP] for p in sample)
+    system = (
+        "Sen bir kodlama oturumunun konu başlığını çıkaran asistansın. "
+        "Sana kullanıcının ardışık prompt'ları verilecek; 3-5 Türkçe kelime ile "
+        "oturumun konusunu özetle. Yalnızca başlık metnini döndür — "
+        "markdown (**, _), tırnak, noktalama veya 'Konu:' / 'Başlık:' "
+        "gibi etiketler EKLEME."
+    )
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": joined},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 30,
+    }
+    req = urllib.request.Request(
+        f"{base}/chat/completions",
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "time-tracker/1.0 (python-urllib)",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, ValueError) as e:
+        print(f"[uyarı] Groq çağrısı başarısız: {e}", file=sys.stderr)
+        return None
+    try:
+        title = data["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError):
+        return None
+    return clean_topic(title) or None
+
+
+_PREFIX_RE = __import__("re").compile(
+    r"^(Kodlama\s+Oturumu(\s+Konusu)?|Oturum(\s+Konusu)?|Konu|Başlık)\s*[:：\-]\s*",
+    flags=__import__("re").IGNORECASE,
+)
+
+
+def clean_topic(raw: str) -> str:
+    s = raw.splitlines()[0] if raw else ""
+    s = s.strip()
+    # markdown bold / quote wrappers
+    s = s.strip("*_`\"'. ")
+    s = _PREFIX_RE.sub("", s)
+    s = s.strip("*_`\"'. ")
+    s = " ".join(s.split())
+    return s[:80]
+
+
+# ----- argparse -----
+
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description="Claude Code proje-süre raporu")
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--week", action="store_true", help="Bu hafta (varsayılan)")
+    g.add_argument("--month", action="store_true", help="Bu ay")
+    g.add_argument("--all", action="store_true", help="Tüm zamanlar")
+    g.add_argument("--since", help="YYYY-MM-DD itibaren")
+    g.add_argument("--days", type=int, help="Son N gün")
+    ap.add_argument("--daily", action=argparse.BooleanOptionalAction, default=True,
+                    help="Günlük dökümü göster (varsayılan açık, kapatmak için --no-daily)")
+    ap.add_argument("--topics", action="store_true",
+                    help="Groq ile her session'ın konu başlığını çıkar ve göster")
+    ap.add_argument("--min-session-min", type=float, default=1.0,
+                    help="--topics ile: bu sürenin altındaki session'lar atlanır (varsayılan 1dk)")
+    return ap.parse_args()
+
+
+def resolve_since(args, now: datetime) -> tuple[datetime, str]:
+    if args.all:
+        return datetime.min.replace(tzinfo=timezone.utc), "Tüm zamanlar"
+    if args.month:
+        local_now = now.astimezone()
+        start_local = local_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        return start_local.astimezone(timezone.utc), f"{start_local:%Y-%m} ayı"
+    if args.since:
+        dt = datetime.fromisoformat(args.since)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt, f"{args.since} itibaren"
+    if args.days:
+        return now - timedelta(days=args.days), f"Son {args.days} gün"
+    local_now = now.astimezone()
+    start_local = (local_now - timedelta(days=local_now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    return start_local.astimezone(timezone.utc), "Bu hafta"
+
+
+# ----- ana akış -----
+
+def main() -> int:
+    args = parse_args()
+    if not CSV_PATH.exists():
+        print(f"Log bulunamadı: {CSV_PATH}", file=sys.stderr)
+        return 1
+
+    now = datetime.now(timezone.utc)
+    since, label = resolve_since(args, now)
+
+    # session_id -> list[(ts, project, prompt)]
+    sessions: dict[str, list[tuple[datetime, str, str]]] = defaultdict(list)
+    with CSV_PATH.open(newline="") as f:
+        for row in csv.reader(f):
+            if len(row) < 3:
+                continue
+            try:
+                ts = parse_ts(row[0])
+            except ValueError:
+                continue
+            prompt = row[3] if len(row) >= 4 else ""
+            sessions[row[1]].append((ts, normalize_project(row[2]), prompt))
+
+    # süre hesabı: her prompt'un aralık ağırlığını bul
+    # session_minutes[session_id][project] -> dakika
+    # also: eğer --topics ise, session'ın ana projesini (en çok dk geçirilen) buluruz
+    session_proj_min: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    project_minutes: dict[str, float] = defaultdict(float)
+    daily: dict[tuple[str, str], float] = defaultdict(float)
+
+    for sid, events in sessions.items():
+        events.sort(key=lambda x: x[0])
+        for i, (t0, proj, _p) in enumerate(events):
+            if i < len(events) - 1:
+                gap = (events[i + 1][0] - t0).total_seconds() / 60
+                minutes = min(gap, IDLE_CAP_MIN) if gap > 0 else 0
+            else:
+                minutes = SINGLE_PROMPT_MIN
+            if minutes <= 0 or t0 < since:
+                continue
+            project_minutes[proj] += minutes
+            session_proj_min[sid][proj] += minutes
+            day_key = t0.astimezone().strftime("%Y-%m-%d")
+            daily[(day_key, proj)] += minutes
+
+    if not project_minutes:
+        print(f"{label}: veri yok")
+        return 0
+
+    title = f"{label} — proje süre raporu"
+    print()
+    print(title)
+    print("-" * max(40, len(title)))
+    total = 0.0
+    for proj, mins in sorted(project_minutes.items(), key=lambda x: -x[1]):
+        print(f"  {proj:<28s} {human(mins):>12s}")
+        total += mins
+    print("-" * max(40, len(title)))
+    print(f"  {'TOPLAM':<28s} {human(total):>12s}")
+
+    if args.daily:
+        print()
+        print("Günlük döküm")
+        print("-" * 40)
+        by_day: dict[str, list[tuple[str, float]]] = defaultdict(list)
+        for (day, proj), mins in daily.items():
+            by_day[day].append((proj, mins))
+        for day in sorted(by_day):
+            day_total = sum(m for _, m in by_day[day])
+            print(f"  {day}  (toplam {human(day_total)})")
+            for proj, mins in sorted(by_day[day], key=lambda x: -x[1]):
+                print(f"    {proj:<26s} {human(mins):>12s}")
+
+    if args.topics:
+        print()
+        print("Session konuları (Groq ile)")
+        print("-" * 40)
+
+        groq_env = load_groq_env()
+        if not (groq_env.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY")):
+            print(f"  [hata] GROQ_API_KEY bulunamadı ({GROQ_ENV_FILE})")
+            return 0
+
+        cache = load_topic_cache()
+        cache_dirty = False
+
+        # Proje başına session'ları topla; session ana projesi = en çok dk'lı proje
+        proj_sessions: dict[str, list[tuple[str, float]]] = defaultdict(list)
+        for sid, pmap in session_proj_min.items():
+            if not pmap:
+                continue
+            total_min = sum(pmap.values())
+            if total_min < args.min_session_min:
+                continue
+            main_proj = max(pmap.items(), key=lambda x: x[1])[0]
+            proj_sessions[main_proj].append((sid, total_min))
+
+        for proj in sorted(proj_sessions, key=lambda p: -project_minutes[p]):
+            print(f"\n  {proj}  ({human(project_minutes[proj])})")
+            for sid, mins in sorted(proj_sessions[proj], key=lambda x: -x[1]):
+                events = sessions[sid]
+                prompts = [p for _, _, p in events if p]
+                prompt_count = len(prompts)
+                cache_key = sid
+                cached = cache.get(cache_key)
+                if cached and cached.get("prompt_count") == prompt_count:
+                    topic = cached["topic"]
+                else:
+                    if not prompts:
+                        topic = "(prompt metni yok)"
+                    else:
+                        topic = groq_summarize(prompts, groq_env) or "(özet alınamadı)"
+                        cache[cache_key] = {"topic": topic, "prompt_count": prompt_count}
+                        cache_dirty = True
+                print(f"    · {topic[:48]:<48s} {human(mins):>10s}")
+
+        if cache_dirty:
+            save_topic_cache(cache)
+
+    print()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,38 @@
+# dependencies
+**/node_modules/
+**/.pnpm-store/
+
+# Next.js
+web/.next/
+web/out/
+web/build/
+web/.turbo/
+
+# TS build info
+**/*.tsbuildinfo
+
+# data (kişisel — friend kendi loglarını üretsin)
+data/project-time.csv
+data/project-time.csv.bak.*
+data/session-topics.json
+data/session-summaries.json
+
+# secrets
+scripts/groq.env
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# env
+.env
+.env.local
+.env*.local
