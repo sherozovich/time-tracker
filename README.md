@@ -1,8 +1,8 @@
 # Claude Code Time Tracker
 
-Claude Code'da harcanan zamanı **proje bazında** takip eden kişisel bir araç.
+Claude Code'da sarflangan vaqtni **loyiha bo'yicha** kuzatadigan shaxsiy asbob.
 
-Her prompt gönderildiğinde bir hook tetiklenir, satır CSV'ye yazılır. Next.js dashboard CSV'yi okuyup günlük / haftalık / aylık raporlar gösterir. Opsiyonel olarak Groq LLM her oturum için kısa bir konu başlığı üretir.
+Har bir prompt yuborilganda hook ishga tushadi va CSV'ga qator yoziladi. Next.js dashboard CSV'ni o'qib kunlik / haftalik / oylik hisobotlarni ko'rsatadi. Ixtiyoriy ravishda Groq LLM har bir sessiya uchun qisqa mavzu sarlavhasini yaratadi.
 
 ```
 ~/.claude/settings.json (UserPromptSubmit hook)
@@ -14,36 +14,36 @@ scripts/log-prompt.sh  ──►  data/project-time.csv
                           web/  (Next.js dashboard, port 4040)
                                     │
                                     ▼
-                          (opsiyonel) Groq → konu özetleri
+                          (ixtiyoriy) Groq → mavzu xulosalari
 ```
 
-## Mimari
+## Arxitektura
 
-- **`scripts/log-prompt.sh`** — Claude Code `UserPromptSubmit` hook'u. Her prompt için CSV'ye satır ekler: `timestamp_utc, session_id, cwd, prompt_excerpt`.
-- **`scripts/project-time`** — terminalden rapor üreten Python CLI (Groq özetiyle).
-- **`scripts/backfill-from-transcripts.py`** — eski Claude Code transcript'lerinden (`~/.claude/projects`) CSV'yi geriye dönük doldurur.
-- **`web/`** — Next.js 16 dashboard. CSV'yi okur, proje / gün bazında zaman dağılımı, oturum listesi, top projeler vs. gösterir.
-- **`data/`** — kişisel CSV ve cache dosyaları (git'e gitmez, `.gitignore`'da).
+- **`scripts/log-prompt.sh`** — Claude Code `UserPromptSubmit` hook'i. Har bir prompt uchun CSV'ga qator qo'shadi: `timestamp_utc, session_id, cwd, prompt_excerpt`.
+- **`scripts/project-time`** — terminaldan hisobot chiqaradigan Python CLI (Groq xulosalari bilan).
+- **`scripts/backfill-from-transcripts.py`** — eski Claude Code transcript'laridan (`~/.claude/projects`) CSV'ni orqaga qarab to'ldiradi.
+- **`web/`** — Next.js 16 dashboard. CSV'ni o'qiydi, loyiha / kun bo'yicha vaqt taqsimoti, sessiyalar ro'yxati, eng faol loyihalar va hokazolarni ko'rsatadi.
+- **`data/`** — shaxsiy CSV va cache fayllari (git'ga tushmaydi, `.gitignore`'da).
 
-## Gereksinimler
+## Talablar
 
-- macOS (yollar `~/Documents/projects/time-tracker` varsayar — bkz. [Önemli not](#önemli-not-yollar-sabit))
+- macOS (yo'llar `~/Documents/projects/time-tracker` deb belgilangan — qarang [Muhim eslatma](#muhim-eslatma-yollar-qattiq-belgilangan))
 - [Claude Code CLI](https://docs.claude.com/en/docs/claude-code)
 - Node.js 20+
 - pnpm (`npm i -g pnpm`)
 - Python 3.10+
-- `jq` (hook için zorunlu — `brew install jq`)
-- Groq API key (opsiyonel — konu özetleri için)
+- `jq` (hook uchun majburiy — `brew install jq`)
+- Groq API key (ixtiyoriy — mavzu xulosalari uchun)
 
-## Önemli not: yollar sabit
+## Muhim eslatma: yo'llar qattiq belgilangan
 
-Hem `scripts/project-time`, hem `web/lib/paths.ts`, hem `log-prompt.sh` projeyi şu yolda bekler:
+`scripts/project-time`, `web/lib/paths.ts` va `log-prompt.sh` loyihani quyidagi yo'lda kutadi:
 
 ```
 ~/Documents/projects/time-tracker
 ```
 
-Klonladıktan sonra mutlaka bu yola koy:
+Klonlagandan keyin albatta shu yo'lga qo'y:
 
 ```bash
 mkdir -p ~/Documents/projects
@@ -51,30 +51,30 @@ git clone <repo-url> ~/Documents/projects/time-tracker
 cd ~/Documents/projects/time-tracker
 ```
 
-Başka yere koyarsan `scripts/project-time` ve `web/lib/paths.ts` dosyalarındaki `TRACKER_ROOT` sabitini güncellemen gerekir.
+Boshqa joyga qo'ysang `scripts/project-time` va `web/lib/paths.ts` fayllaridagi `TRACKER_ROOT` qiymatini yangilashing kerak.
 
-## Kurulum
+## O'rnatish
 
-### 1. Bağımlılıklar
+### 1. Bog'liqliklar
 
 ```bash
 cd ~/Documents/projects/time-tracker/web
 pnpm install
 ```
 
-### 2. Groq (opsiyonel, konu özetleri için)
+### 2. Groq (ixtiyoriy, mavzu xulosalari uchun)
 
 ```bash
 cd ~/Documents/projects/time-tracker/scripts
 cp groq.env.example groq.env
-# groq.env aç, GROQ_API_KEY satırına kendi key'ini koy
+# groq.env'ni och, GROQ_API_KEY qatoriga o'z key'ingni qo'y
 ```
 
-Groq olmadan da dashboard çalışır — sadece "Konu" kolonu boş kalır.
+Groq'siz ham dashboard ishlaydi — faqat "Mavzu" ustuni bo'sh qoladi.
 
-### 3. Claude Code hook'unu bağla
+### 3. Claude Code hook'ini ulash
 
-`~/.claude/settings.json` dosyana ekle (yoksa oluştur):
+`~/.claude/settings.json` fayliga qo'sh (yo'q bo'lsa yarat):
 
 ```json
 {
@@ -93,19 +93,19 @@ Groq olmadan da dashboard çalışır — sadece "Konu" kolonu boş kalır.
 }
 ```
 
-Sonrasında her Claude Code prompt'u `data/project-time.csv`'ye satır yazar.
+Shundan keyin har bir Claude Code prompt'i `data/project-time.csv`'ga qator yozadi.
 
-### 4. (Opsiyonel) Geçmiş transcript'lerden backfill
+### 4. (Ixtiyoriy) Eski transcript'lardan backfill
 
-Daha önce Claude Code kullanıyorsan eski transcript'lerden CSV'yi doldurabilirsin:
+Avval Claude Code ishlatgan bo'lsang, eski transcript'lardan CSV'ni to'ldirishing mumkin:
 
 ```bash
 python3 ~/Documents/projects/time-tracker/scripts/backfill-from-transcripts.py
 ```
 
-`~/.claude/projects` ve `~/Downloads/logs` altındaki JSONL'leri tarar, var olan satırları atlar.
+`~/.claude/projects` va `~/Downloads/logs` ostidagi JSONL'larni skanlaydi, mavjud qatorlarni o'tkazib yuboradi.
 
-## Çalıştırma
+## Ishga tushirish
 
 ### Web dashboard
 
@@ -116,27 +116,27 @@ pnpm dev
 
 → <http://localhost:4040>
 
-Üstteki seçiciyle bugün / bu hafta / bu ay / tüm zaman aralıklarını değiştirebilirsin. Bir projeye tıklayarak detay sayfasına (oturum listesi, günlük dağılım) gidebilirsin.
+Yuqoridagi tanlovchidan bugun / shu hafta / shu oy / butun davr oraliqlarini almashtirish mumkin. Loyiha ustiga bosib batafsil sahifaga (sessiyalar ro'yxati, kunlik taqsimot) o'tasiz.
 
-### Terminal raporu
+### Terminal hisoboti
 
 ```bash
-~/Documents/projects/time-tracker/scripts/project-time            # bugün
-~/Documents/projects/time-tracker/scripts/project-time --week     # bu hafta
+~/Documents/projects/time-tracker/scripts/project-time            # bugun
+~/Documents/projects/time-tracker/scripts/project-time --week     # shu hafta
 ~/Documents/projects/time-tracker/scripts/project-time --help
 ```
 
-## Proje yapısı
+## Loyiha tuzilmasi
 
 ```
 time-tracker/
-├── data/                              # CSV + cache (git'e gitmez)
+├── data/                              # CSV + cache (git'ga tushmaydi)
 │   ├── project-time.csv
 │   ├── session-topics.json
 │   └── session-summaries.json
 ├── scripts/
-│   ├── log-prompt.sh                  # Claude Code hook
-│   ├── project-time                   # CLI rapor
+│   ├── log-prompt.sh                  # Claude Code hook'i
+│   ├── project-time                   # CLI hisobot
 │   ├── backfill-from-transcripts.py
 │   └── groq.env.example
 └── web/                               # Next.js 16 dashboard
@@ -146,10 +146,10 @@ time-tracker/
     └── package.json
 ```
 
-## Süre nasıl hesaplanıyor
+## Vaqt qanday hisoblanadi
 
-Bir prompt'tan diğerine geçen süre toplanır. İki prompt arası **10 dakikadan uzunsa** (idle cap) o ara 10 dk olarak sayılır — molalar süreyi şişirmesin diye. Tek başına bir prompt 2 dk sayılır.
+Bir prompt'dan ikkinchisigacha o'tgan vaqt qo'shiladi. Ikki prompt orasi **10 daqiqadan uzun bo'lsa** (idle cap), bu oraliq 10 daqiqa deb sanaladi — tanaffuslar vaqtni shishirmasligi uchun. Yakka prompt 2 daqiqa hisoblanadi.
 
-## Lisans
+## Litsenziya
 
-Kişisel proje — istediğin gibi kullan.
+Shaxsiy loyiha — xohlaganingdek foydalan.
