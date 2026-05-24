@@ -12,6 +12,7 @@ import { SessionList } from "@/components/session-list";
 import { StatStrip } from "@/components/stat-card";
 import { MotionSection } from "@/components/motion/motion-section";
 import { AutoRefresh } from "@/components/auto-refresh";
+import { AskBox } from "@/components/ask-box";
 import type { RangeMode } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -72,6 +73,10 @@ export default async function Home({
             { label: "Oturum sayısı", value: report.sessions.length.toString() },
           ]}
         />
+      </MotionSection>
+
+      <MotionSection className="mb-12">
+        <AskBox />
       </MotionSection>
 
       <MotionSection className="mb-12 rounded-[var(--radius-bento)] border border-[var(--border)] bg-[var(--surface)] p-6 shadow-[var(--shadow-diffuse)] sm:p-8">
