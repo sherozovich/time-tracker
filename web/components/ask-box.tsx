@@ -9,30 +9,45 @@ type MatchedSession = {
   sessionId: string;
   project: string;
   topic: string | null;
-  minutes: number;
+  sessionMinutes: number;
+  matchedMinutes: number;
+  matchedPromptCount: number;
+  totalPromptCount: number;
   firstTs: string;
   lastTs: string;
-  promptCount: number;
 };
 
 type AskResponse = {
   question: string;
+  project: string | null;
   narrative: string;
   totalMinutes: number;
   matched: MatchedSession[];
 };
 
-const SUGGESTIONS = [
+const GLOBAL_SUGGESTIONS = [
   "rent-app projesinde toplam ne kadar çalıştım?",
   "auth ve login üzerinde kaç saat geçirdim?",
   "Bu hafta en çok hangi konuya zaman ayırdım?",
 ];
 
-export function AskBox() {
+const PROJECT_SUGGESTIONS = [
+  "Auth/login üzerinde kaç saat?",
+  "Deploy ve CI sorunlarına ne kadar zaman ayırdım?",
+  "UI tasarım/styling üzerinde toplam ne kadar?",
+];
+
+export function AskBox({ project }: { project?: string }) {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AskResponse | null>(null);
+
+  const suggestions = project ? PROJECT_SUGGESTIONS : GLOBAL_SUGGESTIONS;
+  const placeholder = project
+    ? `örn. auth üzerinde kaç saat çalıştım?`
+    : `örn. rent-app'ta auth üzerinde kaç saat çalıştım?`;
+  const title = project ? `${project} içinde sor` : "Sorula";
 
   async function ask(question: string) {
     const trimmed = question.trim();
@@ -44,7 +59,7 @@ export function AskBox() {
       const r = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: trimmed }),
+        body: JSON.stringify({ question: trimmed, project: project ?? null }),
       });
       if (!r.ok) {
         const data = (await r.json().catch(() => ({}))) as { error?: string };
@@ -63,10 +78,10 @@ export function AskBox() {
     <div className="rounded-[var(--radius-bento)] border border-[var(--border)] bg-[var(--surface)] p-6 shadow-[var(--shadow-diffuse)] sm:p-8">
       <div className="mb-4 flex items-baseline justify-between">
         <h2 className="text-sm font-medium tracking-tight text-[var(--foreground)]">
-          Sorula
+          {title}
         </h2>
         <span className="font-mono text-[11px] tracking-wide text-[var(--muted)]">
-          Gemini
+          Gemini · prompt-level
         </span>
       </div>
 
@@ -81,7 +96,7 @@ export function AskBox() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           disabled={busy}
-          placeholder="örn. rent-app'ta auth üzerinde kaç saat çalıştım?"
+          placeholder={placeholder}
           className="flex-1 rounded-full border border-[var(--border)] bg-[var(--background)] px-4 py-2.5 text-sm tracking-tight text-[var(--foreground)] placeholder:text-[var(--muted)] focus:border-[var(--foreground)] focus:outline-none disabled:opacity-50"
         />
         <button
@@ -105,7 +120,7 @@ export function AskBox() {
 
       {!result && !busy && !error ? (
         <div className="mt-4 flex flex-wrap gap-2">
-          {SUGGESTIONS.map((s) => (
+          {suggestions.map((s) => (
             <button
               key={s}
               type="button"
@@ -148,7 +163,8 @@ export function AskBox() {
                 {humanMinutes(result.totalMinutes)}
               </span>
               <span className="font-mono text-[11px] tracking-wide text-[var(--muted)]">
-                {result.matched.length} oturum
+                {result.matched.length} oturum ·{" "}
+                {result.matched.reduce((s, m) => s + m.matchedPromptCount, 0)} prompt
               </span>
             </div>
             {result.narrative ? (
@@ -159,36 +175,55 @@ export function AskBox() {
 
             {result.matched.length > 0 ? (
               <ul className="flex flex-col gap-2">
-                {result.matched.slice(0, 12).map((s) => (
-                  <li
-                    key={s.sessionId}
-                    className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <Link
-                          href={`/projects/${projectSlug(s.project)}`}
-                          className="font-mono text-[11px] uppercase tracking-wide text-[var(--muted)] hover:text-[var(--foreground)]"
-                        >
-                          {s.project}
-                        </Link>
-                        <span className="text-[var(--muted)]">·</span>
-                        <span className="font-mono text-[11px] text-[var(--muted)]">
-                          {new Date(s.firstTs).toLocaleDateString("tr-TR", {
-                            day: "2-digit",
-                            month: "short",
-                          })}
-                        </span>
+                {result.matched.slice(0, 12).map((s) => {
+                  const ratio =
+                    s.sessionMinutes > 0
+                      ? Math.round((s.matchedMinutes / s.sessionMinutes) * 100)
+                      : 0;
+                  return (
+                    <li
+                      key={s.sessionId}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          {project ? null : (
+                            <>
+                              <Link
+                                href={`/projects/${projectSlug(s.project)}`}
+                                className="font-mono text-[11px] uppercase tracking-wide text-[var(--muted)] hover:text-[var(--foreground)]"
+                              >
+                                {s.project}
+                              </Link>
+                              <span className="text-[var(--muted)]">·</span>
+                            </>
+                          )}
+                          <span className="font-mono text-[11px] text-[var(--muted)]">
+                            {new Date(s.firstTs).toLocaleDateString("tr-TR", {
+                              day: "2-digit",
+                              month: "short",
+                            })}
+                          </span>
+                          <span className="text-[var(--muted)]">·</span>
+                          <span className="font-mono text-[11px] text-[var(--muted)]">
+                            {s.matchedPromptCount}/{s.totalPromptCount} prompt
+                          </span>
+                        </div>
+                        <div className="mt-0.5 truncate text-[var(--foreground)]">
+                          {s.topic || "(konu yok)"}
+                        </div>
                       </div>
-                      <div className="mt-0.5 truncate text-[var(--foreground)]">
-                        {s.topic || "(konu yok)"}
+                      <div className="shrink-0 text-right">
+                        <div className="font-mono text-xs tracking-tight text-[var(--foreground)]">
+                          {humanMinutes(s.matchedMinutes)}
+                        </div>
+                        <div className="font-mono text-[10px] text-[var(--muted)]">
+                          /{humanMinutes(s.sessionMinutes)} · %{ratio}
+                        </div>
                       </div>
-                    </div>
-                    <div className="shrink-0 font-mono text-xs tracking-tight text-[var(--foreground)]">
-                      {humanMinutes(s.minutes)}
-                    </div>
-                  </li>
-                ))}
+                    </li>
+                  );
+                })}
                 {result.matched.length > 12 ? (
                   <li className="px-3 font-mono text-[11px] text-[var(--muted)]">
                     +{result.matched.length - 12} oturum daha…
